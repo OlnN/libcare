@@ -300,6 +300,25 @@ kp_install_generic() {
 	fi
 }
 
+kp_install_prebuilt() {
+	local ROOT_ORIGINAL="$HOME/root.original"
+
+	eval set -- $KP_INSTALL_FILES
+	while test -n "$1"; do
+		local rpmpath="$2"
+		local prebuildpath="$1"
+		shift 2
+
+		if test "$rpmpath" = "IGNORE"; then
+			continue
+		fi
+
+		prebuildpath="$KP_PROJECT_BUILD_DIR/$prebuildpath"
+
+		/bin/cp -fra $ROOT_ORIGINAL/$rpmpath $prebuildpath
+	done
+}
+
 kp_install_rpm() {
 	kp_install_orig_rpm
 	kp_install_generic
@@ -390,6 +409,10 @@ kp_mark_tests_fail() {
 	touch /kcdata/Tests-FAIL
 }
 
+kp_patch_test() {
+        :
+}
+
 overwrite_utils() {
 	TMPBIN=$(mktemp -d --tmpdir)
 
@@ -440,15 +463,16 @@ main() {
 		kp_build
 		kp_sanity_check
 		kp_gen_kpatch
+		kp_patch_test
 		kp_pack_patch
 	fi
 	if [ "$ACTION" == "test" ]; then
 		kp_unpack_prebuilt
-		kp_prepare_test_binaries
+		kp_install_prebuilt
 		kp_unpack_patch
 		kp_patch_source
 		kp_run_unittests
-		kp_run_blocktests
+		kp_run_stresstests
 	fi
 
 	#clean_dirs
