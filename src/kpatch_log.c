@@ -5,9 +5,13 @@
 #include <errno.h>
 
 #include "kpatch_log.h"
+#ifdef STRESS_TEST
+#include "kpatch_user.h"
+#endif
 
 int log_level = LOG_INFO;
 int log_indent;
+static FILE *log_file;
 
 static void __valog(int level, const char *prefix, const char *fmt, va_list va)
 {
@@ -15,6 +19,14 @@ static void __valog(int level, const char *prefix, const char *fmt, va_list va)
 	if (prefix)
 		fprintf(f, "%s", prefix);
 
+	if (log_file) {
+		va_list vaf;
+		va_copy(vaf, va);
+		if (prefix)
+			fprintf(log_file, "%s", prefix);
+		vfprintf(log_file, fmt, vaf);
+		fflush(log_file);
+	}
 	vfprintf(f, fmt, va);
 }
 
@@ -99,4 +111,21 @@ void _kpfatalerror(const char *file, int line, const char *fmt, ...)
 	va_end(va);
 
 	exit(EXIT_FAILURE);
+}
+
+int log_file_init(char *fname)
+{
+	if (!fname)
+		return -1;
+	log_file = fopen(fname, "a");
+	if (!log_file)
+		return -1;
+	return 0;
+}
+
+void log_file_free()
+{
+	if (log_file)
+		fclose(log_file);
+	log_file = NULL;
 }

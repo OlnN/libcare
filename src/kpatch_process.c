@@ -746,9 +746,9 @@ process_print_cmdline(kpatch_process_t *proc)
 
 		for (i = 0; i < rv; i++) {
 			if (buf[i] != '\n' && isprint(buf[i]))
-				putchar(buf[i]);
+				kpinfo("%c", buf[i]);
 			else
-				printf("\\x%02x", (unsigned char)buf[i]);
+				kpinfo("\\x%02x", (unsigned char)buf[i]);
 		}
 	}
 
@@ -860,9 +860,9 @@ kpatch_process_kickstart_execve_wrapper(kpatch_process_t *proc)
 	if (ret < 0)
 		return -1;
 
-	printf("kpatch_ctl real cmdline=\"");
+	kpinfo("kpatch_ctl real cmdline=\"");
 	process_print_cmdline(proc);
-	printf("\"\n");
+	kpinfo("\"\n");
 
 	return 0;
 }
@@ -1137,11 +1137,11 @@ out_err:
 void
 kpatch_process_print_short(kpatch_process_t *proc)
 {
-	printf("kpatch_ctl targeting pid %d\n", proc->pid);
+	kpinfo("kpatch_ctl targeting pid %d\n", proc->pid);
 	if (proc->send_fd == -1) {
-		printf("kpatch_ctl cmdline=\"");
+		kpinfo("kpatch_ctl cmdline=\"");
 		process_print_cmdline(proc);
-		printf("\"\n");
+		kpinfo("\"\n");
 	}
 }
 

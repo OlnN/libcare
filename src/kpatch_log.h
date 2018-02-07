@@ -33,4 +33,7 @@ void _kplogerror(const char *filename, int line, const char *fmt, ...)
 #define LOG_DEBUG	3
 #define LOG_TRACE	5
 
+int log_file_init(char *fname);
+void log_file_free();
+
 #endif

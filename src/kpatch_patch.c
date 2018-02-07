@@ -437,7 +437,7 @@ object_unapply_old_patch(struct object_file *o)
 		return 1;
 	}
 
-	printf("%s: replacing patch level %d with level %d\n",
+	kpinfo("%s: replacing patch level %d with level %d\n",
 	       o->name,
 	       kpatch_applied->user_level,
 	       kpatch_storage->user_level);
@@ -565,12 +565,12 @@ out_free:
 
 out:
 	if (ret < 0) {
-		printf("Failed to apply patch '%s'\n", storage->path);
+		kpinfo("Failed to apply patch '%s'\n", storage->path);
 		kperr("Failed to apply patch '%s'\n", storage->path);
 	} else if (ret == 0)
-		printf("No patch(es) applicable to PID '%d' have been found\n", pid);
+		kpinfo("No patch(es) applicable to PID '%d' have been found\n", pid);
 	else {
-		printf("%d patch hunk(s) have been successfully applied to PID '%d'\n", ret, pid);
+		kpinfo("%d patch hunk(s) have been successfully applied to PID '%d'\n", ret, pid);
 		ret = 0;
 	}
 
@@ -750,11 +750,11 @@ out:
 	kpatch_process_free(proc);
 
 	if (ret < 0)
-		printf("Failed to cancel patches for %d\n", pid);
+		kpinfo("Failed to cancel patches for %d\n", pid);
 	else if (ret == 0)
-		printf("No patch(es) cancellable from PID '%d' were found\n", pid);
+		kpinfo("No patch(es) cancellable from PID '%d' were found\n", pid);
 	else
-		printf("%d patch hunk(s) were successfully cancelled from PID '%d'\n", ret, pid);
+		kpinfo("%d patch hunk(s) were successfully cancelled from PID '%d'\n", ret, pid);
 
 	return ret;
 }

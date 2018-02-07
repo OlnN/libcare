@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <sys/types.h>
 
 #include <gelf.h>
 #include <libunwind.h>
@@ -566,7 +567,11 @@ cmd_update(int argc, char *argv[])
 
 #ifdef STRESS_TEST
 
-struct test_data {
+static int process_pid = -1;
+static char test_log_base[PATH_MAX-sizeof("-4194304")];
+static char test_log_name[PATH_MAX];
+
+static struct test_data {
 	int option_period;
 	int stat_cycle_num;
 } test_info = { .option_period = 0, .stat_cycle_num = 0 };
@@ -581,7 +586,7 @@ server_wait(int pid, int period)
 	for (i=0; i<period; i++) {
 		nanosleep(&req, &rem);
 		if (kill(pid, 0) != 0) {
-			fprintf(stderr, "Process %d terminated.\n", pid);
+			kpinfo("Process %d terminated.\n", pid);
 			return -1;
 		}
 	}
@@ -589,17 +594,11 @@ server_wait(int pid, int period)
 }
 
 static int
-server_stress_test(int fd, int argc, char *argv[])
+server_stress_test(int fd, int pid)
 {
-	int pid;
 	int delay;
 	test_info.stat_cycle_num = 0;
 	srand(time(NULL));
-
-	if (sscanf(argv[1], "%d", &pid) != 1) {
-		kperr("Can't parse pid from %s\n", argv[1]);
-		return -1;
-	}
 
 	while (1) {
 		while (patch_user(storage_dir, pid, 0, fd) < 0)
@@ -627,11 +626,44 @@ server_stress_test(int fd, int argc, char *argv[])
 	return 0;
 }
 
+static int stress_test_log_init(int is_base_process)
+{
+	if (!strlen(test_log_base))
+		return 0;
+	if (is_base_process) {
+		if (snprintf(test_log_name, PATH_MAX, "%s-base", test_log_base) >= PATH_MAX) {
+			kplogerror("Can't initialize log \'%s\'-<PID>\n", test_log_base);
+			return -1;
+		}
+	} else
+		if (snprintf(test_log_name, PATH_MAX, "%s-%d", test_log_base, getpid()) >= PATH_MAX) {
+			kplogerror("Can't initialize log \'%s\'-<PID>\n", test_log_base);
+			return -1;
+		}
+	if (log_file_init(test_log_name)) {
+		kplogerror("Can't open log file \'%s\'\n", test_log_name);
+		return -1;
+	}
+	return 0;
+}
+
 static int cmd_stress_test(int fd, int argc, char *argv[])
 {
+	if (sscanf(argv[1], "%d", &process_pid) != 1) {
+		kplogerror("Can't parse pid from %s\n", argv[1]);
+		return -1;
+	}
+	kpinfo("Spawning child to patch pid %d\n", process_pid);
+
 	int child = fork();
 	if (child == 0) {
-		int rv = server_stress_test(fd, argc, argv);
+		log_file_free();
+		if (stress_test_log_init(0))
+			kpfatal("Can't initialize log.\n");
+
+		int rv = server_stress_test(fd, process_pid);
+
+		log_file_free();
 		exit(rv);
 	}
 	close(fd);
@@ -640,7 +672,11 @@ static int cmd_stress_test(int fd, int argc, char *argv[])
 
 static int usage_stresstest()
 {
-	fprintf(stderr, "usage: libcare-stresstest PERIOD(ms, 0 - only patch) <UNIX socket> [STORAGE ROOT]\n");
+	fprintf(stderr, "usage: libcare-stresstest [args] PERIOD(ms, 0 - only patch) <UNIX socket> [STORAGE ROOT]\n");
+	fprintf(stderr, "\nOptions:\n");
+	fprintf(stderr, "  -v          - verbose mode\n");
+	fprintf(stderr, "  -l <BASE>   - log file name <BASE>-PID\n");
+	fprintf(stderr, "  -h          - this message\n");
 	return -1;
 }
 
@@ -828,9 +864,11 @@ cmd_server(int argc, char *argv[])
 	}
 
 #ifdef STRESS_TEST
-	if (sscanf(argv[0], "%d", &test_info.option_period) != 1) {
+	if (stress_test_log_init(1))
+		kpfatal("Can't initialize log.\n");
+	if (sscanf(argv[0], "%d", &test_info.option_period) != 1)
 		kplogerror("Can't parse period from %s\n", argv[0]);
-	}
+	kpinfo("Starting libcare-stresstest: period=%d\n", test_info.option_period);
 #endif
 
 	sfd = server_bind_socket(argv[1]);
@@ -954,13 +992,23 @@ int main(int argc, char *argv[])
 {
 	int opt;
 
-	while ((opt = getopt(argc, argv, "+vh")) != EOF) {
+	while ((opt = getopt(argc, argv, "+vl:h")) != EOF) {
 		switch (opt) {
 			case 'v':
 				log_level += 1;
 				break;
 			case 'h':
 				return usage(NULL);
+			case 'l':
+#ifdef STRESS_TEST
+				strncpy(test_log_base, optarg, sizeof(test_log_base));
+				if (test_log_base[sizeof(test_log_base)-1]) {
+					usage_stresstest();
+					kpfatal("Can't initialize log\n");
+					break;
+				}
+				break;
+#endif
 			default:
 				return usage("unknown option");
 		}
