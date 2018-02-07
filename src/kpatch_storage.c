@@ -398,7 +398,7 @@ int storage_lookup_patches(kpatch_storage_t *storage, kpatch_process_t *proc)
 	struct kp_file *pkpfile;
 	struct object_file *o;
 	const char *bid;
-	int found = 0, ret;
+	int found = -1, ret;
 
 	list_for_each_entry(o, &proc->objs, list) {
 		if (!o->is_elf || is_kernel_object_name(o->name))
@@ -410,6 +410,8 @@ int storage_lookup_patches(kpatch_storage_t *storage, kpatch_process_t *proc)
 			       o->name);
 			continue;
 		}
+		if (found < 0)
+			found = 0;
 
 		ret = storage_load_patch(storage, bid, &pkpfile);
 		if (ret == PATCH_OPEN_ERROR) {
