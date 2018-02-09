@@ -5,8 +5,10 @@
 #include <errno.h>
 
 #include "kpatch_log.h"
+
 #ifdef STRESS_TEST
 #include "kpatch_user.h"
+extern int parent_pid;
 #endif
 
 int log_level = LOG_INFO;
@@ -64,6 +66,10 @@ void kpfatal(const char *fmt, ...)
 	__valog(LOG_ERR, "FATAL! ", fmt, va);
 	va_end(va);
 
+#ifdef STRESS_TEST
+	if (parent_pid >= 0)
+		stress_test_notify_parent();
+#endif
 	exit(1);
 }
 

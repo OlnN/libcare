@@ -567,6 +567,7 @@ cmd_update(int argc, char *argv[])
 
 #ifdef STRESS_TEST
 
+int parent_pid = -1;
 static int process_pid = -1;
 static char test_log_base[PATH_MAX-sizeof("-4194304")];
 static char test_log_name[PATH_MAX];
@@ -647,16 +648,53 @@ static int stress_test_log_init(int is_base_process)
 	return 0;
 }
 
+void stress_test_notify_parent()
+{
+	if (parent_pid < 0)
+		return;
+	union sigval code;
+	code.sival_int = process_pid;
+	sigqueue(parent_pid, SIGCHLD, code);
+}
+
+void stress_test_signal_handler(int sig, siginfo_t *info, void *ucontext)
+{
+	switch (sig) {
+	case SIGCHLD: {
+		if (info->si_code == SI_QUEUE) {
+			kpinfo("Child process pid %d fatal error.\n", info->si_pid);
+			return;
+		} else {
+			int pid, status;
+			while ((pid = waitpid(-1, &status, WNOHANG)) > 0)
+				kpinfo("Process pid %d exited.\n", pid);
+			return;
+		}
+		break;
+	}
+	}
+}
+
+void stress_test_install_sigaction()
+{
+	struct sigaction sigact;
+	sigemptyset(&sigact.sa_mask);
+	sigact.sa_flags = SA_SIGINFO | SA_RESTART;
+	sigact.sa_sigaction = &stress_test_signal_handler;
+	sigaction(SIGCHLD, &sigact, NULL);
+}
+
 static int cmd_stress_test(int fd, int argc, char *argv[])
 {
 	if (sscanf(argv[1], "%d", &process_pid) != 1) {
 		kplogerror("Can't parse pid from %s\n", argv[1]);
 		return -1;
 	}
-	kpinfo("Spawning child to patch pid %d\n", process_pid);
 
+	parent_pid = getpid();
 	int child = fork();
 	if (child == 0) {
+		signal(SIGCHLD, SIG_DFL);
 		log_file_free();
 		if (stress_test_log_init(0))
 			kpfatal("Can't initialize log.\n");
@@ -666,6 +704,7 @@ static int cmd_stress_test(int fd, int argc, char *argv[])
 		log_file_free();
 		exit(rv);
 	}
+	kpinfo("Spawned child %d to patch pid %d\n", child, process_pid);
 	close(fd);
 	return 0;
 }
@@ -1020,7 +1059,8 @@ int main(int argc, char *argv[])
 #ifdef STRESS_TEST
 	if (argc < 3)
 		return usage("not enough arguments.");
-	signal(SIGCHLD, SIG_IGN);
+
+	stress_test_install_sigaction();
 	return cmd_server(argc, argv);
 #else
 	if (argc < 1)

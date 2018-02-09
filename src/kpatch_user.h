@@ -7,5 +7,6 @@
 
 int cmd_patch_user(int argc, char *argv[]);
 int cmd_unpatch_user(int argc, char *argv[]);
+void stress_test_notify_parent();
 
 #endif
