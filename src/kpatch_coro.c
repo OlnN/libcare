@@ -5,6 +5,7 @@
 #include <libunwind-ptrace.h>
 
 #include <sys/utsname.h>
+#include <sys/mman.h>
 
 #include <asm/prctl.h>
 
@@ -114,8 +115,6 @@ kpatch_coro_free(struct kpatch_coro *c)
 #define STACK_OFFSET_UC_LINK_PTR (4 * sizeof(long))
 #define STACK_OFFSET_COROUTINE_UCONTEXT (7 * sizeof(long))
 #define STACK_OFFSET_COROUTINE (8 * sizeof(long))
-
-#define UCONTEXT_OFFSET_JMPBUF 0x38
 
 #define UCONTEXT_OFFSET_UC_STACK_SS_SP		offsetof(ucontext_t, uc_stack.ss_sp)
 #define UCONTEXT_OFFSET_UC_STACK_SS_SIZE	offsetof(ucontext_t, uc_stack.ss_size)
@@ -235,48 +234,29 @@ int is_centos7_qemu(struct kpatch_process *proc)
 	return 1;
 };
 
-
-static int qemu_centos7_find_coroutines(struct kpatch_process *proc)
+static int get_patch_coroutine_env_offset(struct kpatch_process *proc)
 {
-	struct object_file *oheap, *tcmalloc;
-	struct process_mem_iter *iter;
-	struct kpatch_coro *coro;
-	struct vm_area heap;
-	unsigned long __start_context, ptr_guard, cur;
+	struct object_file *o;
+	list_for_each_entry(o, &proc->objs, list) {
+		if (!o->name || strcmp(proc->comm, o->name))
+			continue;
+
+		if (o->kpfile.patch)
+			return o->kpfile.patch->coroutine_env_offset;
+
+		if (o->skpfile && o->skpfile->patch)
+			return o->skpfile->patch->coroutine_env_offset;
+	}
+	return 0;
+}
+
+static int qemu_centos7_find_coroutines_vma(struct kpatch_process *proc, struct vm_area vma,
+	unsigned long __start_context, unsigned long ptr_guard, int patch_coroutine_env_offset)
+{
 	int ret;
-
-	if (!is_test_target(proc, "fail_coro") && !is_centos7_qemu(proc))
-		return CORO_SEARCH_NEXT;
-
-	kpdebug("Looking for coroutines in QEMU %d...\n", proc->pid);
-	oheap = kpatch_process_get_obj_by_regex(proc, "^\\[heap\\]$");
-	tcmalloc = kpatch_process_get_obj_by_regex(proc, "^libtcmalloc.*\\.so\\.4.*");
-	if (!oheap) {
-		kpdebug("FAIL. Can't find [heap](%p)\n", oheap);
-		return -1;
-	}
-
-	/* NOTE(pboldin) We accurately craft stack for test so we
-	 * don't need tcmalloc installed and used
-	 */
-	if (!tcmalloc && !is_test_target(proc, "fail_coro")) {
-		kpdebug("FAIL. Can't find tcmalloc lib. Full [heap] scan is not "
-			"implemented yet");
-		return -1;
-	}
-	heap = list_first_entry(&oheap->vma, struct obj_vm_area, list)->inmem;
-
-	ret = locate_start_context_symbol(proc, &__start_context);
-	if (ret < 0) {
-		kpdebug("FAIL. Can't locate_start_context_symbol\n");
-		return CORO_SEARCH_NEXT;
-	}
-
-	ret = get_ptr_guard(proc, &ptr_guard);
-	if (ret < 0) {
-		kpdebug("FAIL. Can't get_ptr_guard\n");
-		return -1;
-	}
+	struct process_mem_iter *iter;
+	unsigned long cur;
+	struct kpatch_coro *coro;
 
 	iter = kpatch_process_mem_iter_init(proc);
 	if (iter == NULL) {
@@ -284,11 +264,10 @@ static int qemu_centos7_find_coroutines(struct kpatch_process *proc)
 		return -1;
 	}
 
-	for (cur = heap.start; cur < heap.end; cur += PAGE_SIZE) {
+	for (cur = vma.start; cur < vma.end; cur += PAGE_SIZE) {
 		unsigned long val, val2;
 		unsigned long ptr = cur + PAGE_SIZE;
 		unsigned long *regs;
-
 		val = PEEK_ULONG(ptr - STACK_OFFSET_START_CONTEXT);
 		if (val != __start_context)
 			continue;
@@ -308,7 +287,7 @@ static int qemu_centos7_find_coroutines(struct kpatch_process *proc)
 			break;
 		}
 		ret = kpatch_process_mem_read(proc,
-					      val + UCONTEXT_OFFSET_JMPBUF,
+					      val + patch_coroutine_env_offset,
 					      &coro->env,
 					      sizeof(coro->env));
 		if (ret < 0) {
@@ -321,8 +300,66 @@ static int qemu_centos7_find_coroutines(struct kpatch_process *proc)
 		regs[JB_RSP] = PTR_DEMANGLE(regs[JB_RSP], ptr_guard);
 		regs[JB_RIP] = PTR_DEMANGLE(regs[JB_RIP], ptr_guard);
 	}
-
 	kpatch_process_mem_iter_free(iter);
+	return ret;
+}
+
+static int qemu_centos7_find_coroutines(struct kpatch_process *proc)
+{
+	struct object_file *oanonymous, *oheap, *tcmalloc;
+	struct obj_vm_area *ovma;
+	struct vm_area heap;
+	unsigned long __start_context, ptr_guard;
+	int patch_coroutine_env_offset ;
+	int ret;
+
+	if (!is_test_target(proc, "fail_coro") && !is_centos7_qemu(proc))
+		return CORO_SEARCH_NEXT;
+
+	kpdebug("Looking for coroutines in QEMU %d...\n", proc->pid);
+	tcmalloc = kpatch_process_get_obj_by_regex(proc, "^libtcmalloc.*\\.so\\.4.*");
+
+	/* NOTE(pboldin) We accurately craft stack for test so we
+	 * don't need tcmalloc installed and used
+	 */
+	if (!tcmalloc && !is_test_target(proc, "fail_coro")) {
+		kpdebug("FAIL. Can't find tcmalloc lib. Full [heap] scan is not "
+			"implemented yet");
+		return -1;
+	}
+
+	ret = get_ptr_guard(proc, &ptr_guard);
+	if (ret < 0) {
+		kpdebug("FAIL. Can't get_ptr_guard\n");
+		return -1;
+	}
+
+	ret = locate_start_context_symbol(proc, &__start_context);
+	if (ret < 0) {
+		kpdebug("FAIL. Can't locate_start_context_symbol\n");
+		return CORO_SEARCH_NEXT;
+	}
+
+	patch_coroutine_env_offset = get_patch_coroutine_env_offset(proc);
+	if (patch_coroutine_env_offset <= 0) {
+		kpdebug("FAIL. No patch_coroutine_env_offset\n");
+		return patch_coroutine_env_offset;
+	}
+
+	oheap = kpatch_process_get_obj_by_regex(proc, "^\\[heap\\]$");
+	if (!oheap) {
+		kpdebug("FAIL. Can't find [heap](%p)\n", oheap);
+		return -1;
+	}
+	heap = list_first_entry(&oheap->vma, struct obj_vm_area, list)->inmem;
+	qemu_centos7_find_coroutines_vma(proc, heap, __start_context, ptr_guard, patch_coroutine_env_offset);
+
+	oanonymous = kpatch_process_get_obj_by_regex(proc, "\\[anonymous\\]$");
+	list_for_each_entry(ovma, &oanonymous->vma, list) {
+		if (!(ovma->inmem.prot & (PROT_READ|PROT_WRITE)))
+			continue;
+		qemu_centos7_find_coroutines_vma(proc, ovma->inmem, __start_context, ptr_guard, patch_coroutine_env_offset);
+	}
 
 	return ret;
 }

@@ -369,6 +369,11 @@ kp_gen_kpatch() {
 
 		eu-unstrip "$HOME/root.original/$t" "$debug"
 
+		local coroutine_arg=""
+		if test -n "$COROUTINE_ENV_OFFSET"; then
+			coroutine_arg="-c $COROUTINE_ENV_OFFSET"
+		fi
+
 		$KPATCH_PATH/kpatch_strip --strip $patched $patched.kpstripped
 		cp $patched.kpstripped $patched.relfixup
 		$KPATCH_PATH/kpatch_strip --rel-fixup $debug $patched.relfixup
@@ -376,7 +381,8 @@ kp_gen_kpatch() {
 		/usr/bin/strip --strip-unneeded $patched.stripped
 		cp $patched.stripped $patched.undolink
 		$KPATCH_PATH/kpatch_strip --undo-link $debug $patched.undolink
-		$KPATCH_PATH/kpatch_make -b "$buildid" $patched.undolink -o $patched.kpatch
+		$KPATCH_PATH/kpatch_make -b "$buildid" $coroutine_arg \
+						$patched.undolink -o $patched.kpatch
 		cp $patched.kpatch $HOME/${KP_PROJECT_PATCH%.*}/$buildid.kpatch
 		no_patches=0
 	done
@@ -451,6 +457,10 @@ kp_patch_test() {
 	exit 1
 }
 
+kp_calc_coroutine_env_offset() {
+	unset COROUTINE_ENV_OFFSET
+}
+
 main() {
 	echo "Starting at "`date +%T`"..."
 
@@ -473,6 +483,7 @@ main() {
 		kp_build_hook
 		kp_build
 		kp_sanity_check
+		kp_calc_coroutine_env_offset
 		kp_gen_kpatch
 		kp_pack_patch
 	elif test "$ACTION" == "test"; then

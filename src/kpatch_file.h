@@ -152,7 +152,8 @@ struct kpatch_file {
 	};
 
 	char srcversion[25]; /* srcversion of module or zeros */
-	char pad2[231];
+	uint32_t coroutine_env_offset;
+	char pad2[227];
 
 	/* relocations */
 	/* content */

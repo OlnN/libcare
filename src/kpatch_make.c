@@ -26,7 +26,7 @@ static void xerror(const char *fmt, ...)
 	exit(1);
 }
 
-int make_file(int fdo, void *buf1, off_t size, const char *buildid)
+int make_file(int fdo, void *buf1, off_t size, const char *buildid, int coroutine_env_offset)
 {
 	int res;
 	struct kpatch_file khdr;
@@ -44,6 +44,8 @@ int make_file(int fdo, void *buf1, off_t size, const char *buildid)
 	size = ALIGN(size, 16);
 	khdr.total_size = khdr.kpatch_offset + size;
 
+	khdr.coroutine_env_offset = coroutine_env_offset;
+
 	res = write(fdo, &khdr, sizeof(khdr));
 	res += write(fdo, buf1, size);
 
@@ -57,6 +59,7 @@ static void usage(void)
 {
 	printf("Usage: kpatch_make [-d] -n <modulename> [-v <version>] -e <entryaddr> [-o <output>] <input1> [input2]\n");
 	printf("   -b buildid = target buildid for patch\n");
+	printf("   -c offset = env offset in coroutine\n");
 	printf("   -d debug (verbose)\n");
 	printf("\n");
 	printf("   result is printed to output and is the following:\n");
@@ -72,8 +75,9 @@ int main(int argc, char **argv)
 	void *buf;
 	struct stat st;
 	char *buildid = NULL, *outputname = NULL;
+	int coroutine_env_offset = -1;
 
-	while ((opt = getopt(argc, argv, "db:o:v:s:")) != -1) {
+	while ((opt = getopt(argc, argv, "db:o:v:s:c:")) != -1) {
 		switch (opt) {
 		case 'd':
 			verbose = 1;
@@ -83,6 +87,12 @@ int main(int argc, char **argv)
 			break;
 		case 'o':
 			outputname = strdup(optarg);
+			break;
+		case 'c':
+			if (sscanf(optarg, "%d", &coroutine_env_offset) != 1) {
+				printf("Error: can't parse jmpbuf offset for coroutines.\n");
+				usage();
+			}
 			break;
 		default: /* '?' */
 			usage();
@@ -109,5 +119,5 @@ int main(int argc, char **argv)
 			xerror("Can't open output file '%s'", outputname);
 	}
 
-	return make_file(fdo, buf, st.st_size, buildid);
+	return make_file(fdo, buf, st.st_size, buildid, coroutine_env_offset);
 }
