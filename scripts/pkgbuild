@@ -340,9 +340,13 @@ kp_build() {
 kp_gen_kpatch() {
 	echo "  generating kpatches"
 
-	pushd $HOME/root.patched
+	if test -n $KP_PATCHED_BINARIES; then
+		targets=$KP_PATCHED_BINARIES
+	else
+		pushd $HOME/root.patched
 		targets=$(find . -perm /0111 -type f)
-	popd
+		popd
+	fi
 
 	rm -rf $HOME/${KP_PROJECT_PATCH%.*}
 	mkdir $HOME/${KP_PROJECT_PATCH%.*}
