@@ -256,15 +256,20 @@ patch_ensure_safety(struct object_file *o,
 		ret = kpatch_ptrace_execute_until(o->proc, 3000, 0);
 
 		/* OK, at this point we may have new threads, discover them */
-		if (ret == 0)
+		if (ret == 0) {
 			ret = kpatch_process_attach(o->proc);
+			if (ret == ERROR_RESOURCE_ACCESS) {
+				free(retips);
+				return ret;
+			}
+		}
 		if (ret == 0)
 			ret = patch_verify_safety(o, NULL, action);
 	}
 
 	free(retips);
 
-	return ret ? -1 : 0;
+	return ret ? ERROR_RESOURCE_BUSY : 0;
 }
 
 /*****************************************************************************
@@ -347,12 +352,12 @@ object_apply_patch(struct object_file *o)
 	ret = duplicate_kp_file(o);
 	if (ret < 0) {
 		kplogerror("can't duplicate kp_file\n");
-		return -1;
+		return ERROR_PATCH_FAILURE;
 	}
 
 	ret = kpatch_elf_load_kpatch_info(o);
 	if (ret < 0)
-		return ret;
+		return ERROR_PATCH_FAILURE;
 
 	kp = o->kpfile.patch;
 
@@ -379,26 +384,26 @@ object_apply_patch(struct object_file *o)
 	 */
 	ret = kpatch_object_allocate_patch(o, sz);
 	if (ret < 0)
-		return ret;
+		return ERROR_PATCH_FAILURE;
 	ret = kpatch_resolve(o);
 	if (ret < 0)
-		return ret;
+		return ERROR_PATCH_FAILURE;
 	ret = kpatch_relocate(o);
 	if (ret < 0)
-		return ret;
+		return ERROR_PATCH_FAILURE;
 	ret = kpatch_process_mem_write(o->proc,
 				       kp,
 				       o->kpta,
 				       kp->total_size);
 	if (ret < 0)
-		return -1;
+		return ERROR_PATCH_FAILURE;
 	if (o->jmp_table) {
 		ret = kpatch_process_mem_write(o->proc,
 					       o->jmp_table,
 					       o->kpta + kp->jmp_offset,
 					       o->jmp_table->size);
 		if (ret < 0)
-			return ret;
+			return ERROR_PATCH_FAILURE;
 	}
 
 	ret = patch_ensure_safety(o, ACTION_APPLY_PATCH);
@@ -408,7 +413,7 @@ object_apply_patch(struct object_file *o)
 	for (i = 0; i < o->ninfo; i++) {
 		ret = patch_apply_hunk(o, i);
 		if (ret < 0)
-			return ret;
+			return ERROR_PATCH_FAILURE;
 	}
 
 	return 1;
@@ -442,9 +447,10 @@ object_unapply_old_patch(struct object_file *o)
 	       kpatch_applied->user_level,
 	       kpatch_storage->user_level);
 	ret = object_unapply_patch(o, /* check_flag */ 0);
-	if (ret < 0)
+	if (ret < 0) {
 		kperr("can't unapply patch for %s\n", o->name);
-	else {
+		ret = ERROR_UNPATCH_FAILURE;
+	} else {
 		/* TODO(pboldin): handle joining the holes here */
 		o->applied_patch = NULL;
 		o->info = NULL;
@@ -464,7 +470,7 @@ kpatch_apply_patches(kpatch_process_t *proc)
 
 		ret = object_unapply_old_patch(o);
 		if (ret < 0)
-			break;
+			return ret;
 
 		ret = object_apply_patch(o);
 		if (ret < 0)
@@ -480,11 +486,11 @@ unpatch:
 	 * TODO(pboldin): close the holes so the state is the same
 	 * after unpatch
 	 */
-	ret = object_unapply_patch(o, /* check_flag */ 1);
-	if (ret < 0) {
+	if (object_unapply_patch(o, /* check_flag */ 1) < 0) {
+		ret = ERROR_UNPATCH_FAILURE;
 		kperr("Can't unapply patch for %s\n", o->name);
 	}
-	return -1;
+	return ret;
 }
 
 int process_patch(int pid, void *_data)
@@ -565,16 +571,18 @@ out_free:
 
 out:
 	if (ret < 0) {
-		printf("Failed to apply patch '%s'\n", storage->path);
+		if (ret == -1)
+			return ERROR_PATCH_FAILURE;
+		kpinfo("Failed to apply patch '%s'\n", storage->path);
 		kperr("Failed to apply patch '%s'\n", storage->path);
-	} else if (ret == 0)
-		printf("No patch(es) applicable to PID '%d' have been found\n", pid);
-	else {
-		printf("%d patch hunk(s) have been successfully applied to PID '%d'\n", ret, pid);
-		ret = 0;
+		return ret;
+	} else if (ret == 0) {
+		kpinfo("No patch(es) applicable to PID '%d' have been found\n", pid);
+		return ERROR_PATCH_NOT_FOUND;
+	} else {
+		kpinfo("%d patch hunk(s) have been successfully applied to PID '%d'\n", ret, pid);
+		return ERROR_SUCCESS;
 	}
-
-	return ret;
 }
 
 
@@ -592,6 +600,8 @@ object_find_applied_patch_info(struct object_file *o)
 
 	if (o->info != NULL)
 		return 0;
+	if (!o->kpta || !o->kpfile.patch)
+		return -1;
 
 	iter = kpatch_process_mem_iter_init(o->proc);
 	if (iter == NULL)
@@ -617,6 +627,8 @@ object_find_applied_patch_info(struct object_file *o)
 		o->ninfo++;
 	} while (1);
 
+	if (!o->applied_patch)
+		return 0;
 	o->applied_patch->info = o->info;
 	o->applied_patch->ninfo = o->ninfo;
 
@@ -641,6 +653,8 @@ object_unapply_patch(struct object_file *o, int check_flag)
 	if (ret < 0)
 		return ret;
 
+	if (!o->kpta || !o->kpfile.patch)
+		return -1;
 	orig_code_addr = o->kpta + o->kpfile.patch->user_undo;
 
 	for (i = 0; i < o->ninfo; i++) {
@@ -728,7 +742,7 @@ int process_unpatch(int pid, void *_data)
 
 	ret = kpatch_process_init(proc, pid, /* start */ 0, /* send_fd */ -1);
 	if (ret < 0)
-		return -1;
+		return ret;
 
 	kpatch_process_print_short(proc);
 
@@ -749,13 +763,17 @@ int process_unpatch(int pid, void *_data)
 out:
 	kpatch_process_free(proc);
 
-	if (ret < 0)
-		printf("Failed to cancel patches for %d\n", pid);
-	else if (ret == 0)
-		printf("No patch(es) cancellable from PID '%d' were found\n", pid);
-	else
-		printf("%d patch hunk(s) were successfully cancelled from PID '%d'\n", ret, pid);
-
-	return ret;
+	if (ret < 0) {
+		kpinfo("Failed to cancel patches for %d\n", pid);
+		if (ret == -1)
+			return ERROR_UNPATCH_FAILURE;
+		return ret;
+	} else if (ret == 0) {
+		kpinfo("No patch(es) cancellable from PID '%d' were found\n", pid);
+		return ERROR_PATCH_NOT_FOUND;
+	} else {
+		kpinfo("%d patch hunk(s) were successfully cancelled from PID '%d'\n", ret, pid);
+		return 0;
+	}
 }
 

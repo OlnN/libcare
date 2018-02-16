@@ -630,7 +630,7 @@ kpatch_process_mem_open(kpatch_process_t *proc, int mode)
 	proc->memfd = open(path, mode == MEM_WRITE ? O_RDWR : O_RDONLY);
 	if (proc->memfd < 0) {
 		kplogerror("can't open /proc/%d/mem", proc->pid);
-		return -1;
+		return ERROR_PROCESS_NOT_FOUND;
 	}
 
 	return 0;
@@ -643,7 +643,7 @@ kpatch_process_attach(kpatch_process_t *proc)
 	size_t i, npids = 0, alloc = 0, prevnpids = 0, nattempts;
 
 	if (kpatch_process_mem_open(proc, MEM_WRITE) < 0)
-		return -1;
+		return ERROR_RESOURCE_ACCESS;
 
 	for (nattempts = 0; nattempts < max_attach_attempts; nattempts++) {
 		ret = process_list_threads(proc, &pids, &npids, &alloc);
@@ -713,7 +713,7 @@ detach:
 	process_detach(proc);
 dealloc:
 	free(pids);
-	return -1;
+	return ERROR_RESOURCE_ACCESS;
 }
 
 static void
@@ -890,7 +890,7 @@ kpatch_process_load_libraries(kpatch_process_t *proc)
 	ret = kpatch_process_attach(proc);
 	if (ret < 0) {
 		kperr("unable to attach to just started process\n");
-		return -1;
+		return ret;
 	}
 
 	if (proc->send_fd != -1) {
@@ -1131,7 +1131,7 @@ kpatch_process_init(kpatch_process_t *proc,
 out_unlock:
 	unlock_process(pid, fdmaps);
 out_err:
-	return -1;
+	return ERROR_PROCESS_NOT_FOUND;
 }
 
 void

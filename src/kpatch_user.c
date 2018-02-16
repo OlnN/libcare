@@ -34,7 +34,7 @@ static char storage_dir[PATH_MAX] = "/var/lib/libcare";
  * Utilities.
  ****************************************************************************/
 
-/* Return -1 to indicate error, -2 to stop immediately */
+/* Return -1 to indicate error */
 typedef int (callback_t)(int pid, void *data);
 
 static int
@@ -68,7 +68,7 @@ static int usage_patch(const char *err)
 	fprintf(stderr, "\nOptions:\n");
 	fprintf(stderr, "  -h          - this message\n");
 	fprintf(stderr, "  -p <PID>    - target process\n");
-	return err ? 0 : -1;
+	return err ? 0 : ERROR_ARGUMENTS;
 }
 
 static int
@@ -80,7 +80,7 @@ patch_user(const char *storage_path, int pid,
 
 	ret = storage_init(&storage, storage_path);
 	if (ret < 0)
-		return ret;
+		return ERROR_PATCH_NOT_FOUND;
 
 	ret = processes_patch(&storage, pid, is_just_started, send_fd);
 
@@ -337,7 +337,7 @@ process_info(int pid, void *_data)
 
 	ret = kpatch_process_init(proc, pid, /* start */ 0, /* send_fd */ -1);
 	if (ret < 0)
-		return -1;
+		return ret;
 
 	ret = kpatch_process_mem_open(proc, MEM_READ);
 	if (ret < 0)
@@ -631,6 +631,7 @@ static int cmd_stress_test(int fd, int argc, char *argv[])
 {
 	int child = fork();
 	if (child == 0) {
+		signal(SIGCHLD, SIG_DFL);
 		int rv = server_stress_test(fd, argc, argv);
 		exit(rv);
 	}
@@ -640,8 +641,12 @@ static int cmd_stress_test(int fd, int argc, char *argv[])
 
 static int usage_stresstest()
 {
-	fprintf(stderr, "usage: libcare-stresstest PERIOD(ms, 0 - only patch) <UNIX socket> [STORAGE ROOT]\n");
-	return -1;
+	fprintf(stderr, "usage: libcare-stresstest [args] PERIOD(ms, 0 - only patch) <UNIX socket> [STORAGE ROOT]\n");
+	fprintf(stderr, "\nOptions:\n");
+	fprintf(stderr, "  -v          - verbose mode\n");
+	fprintf(stderr, "  -l <BASE>   - log file name <BASE>-PID\n");
+	fprintf(stderr, "  -h          - this message\n");
+	return ERROR_ARGUMENTS;
 }
 
 #endif
@@ -745,7 +750,7 @@ static int usage_server(const char *err)
 	if (err)
 		fprintf(stderr, "err: %s\n", err);
 	fprintf(stderr, "usage: libcare-ctl server <UNIX socket> [STORAGE ROOT]\n");
-	return -1;
+	return ERROR_ARGUMENTS;
 }
 
 #define LISTEN_BACKLOG 1
@@ -904,9 +909,7 @@ processes_do(int pid, callback_t callback, void *data)
 
 		rv = callback(pid, data);
 		if (rv < 0)
-			ret = -1;
-		if (rv == -2)
-			break;
+			ret = rv;
 	}
 
 	closedir(dir);
@@ -930,7 +933,7 @@ static int usage(const char *err)
 	fprintf(stderr, "  unpatch- unapply patch from a user-space process\n");
 	fprintf(stderr, "  info   - show info on applied patches\n");
 	fprintf(stderr, "  server - listen on a unix socket for commands\n");
-	return -1;
+	return ERROR_ARGUMENTS;
 }
 
 static int
@@ -960,7 +963,7 @@ int main(int argc, char *argv[])
 				log_level += 1;
 				break;
 			case 'h':
-				return usage(NULL);
+				return usage(0);
 			default:
 				return usage("unknown option");
 		}

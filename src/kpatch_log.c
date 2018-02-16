@@ -52,7 +52,11 @@ void kpfatal(const char *fmt, ...)
 	__valog(LOG_ERR, "FATAL! ", fmt, va);
 	va_end(va);
 
-	exit(1);
+#ifdef STRESS_TEST
+	if (parent_pid >= 0)
+		stress_test_notify_parent();
+#endif
+	exit(ERROR_FATAL);
 }
 
 extern int elf_errno(void) __attribute__((weak));
@@ -98,5 +102,5 @@ void _kpfatalerror(const char *file, int line, const char *fmt, ...)
 	__valogerror(file, line, fmt, va);
 	va_end(va);
 
-	exit(EXIT_FAILURE);
+	exit(ERROR_FATAL);
 }
