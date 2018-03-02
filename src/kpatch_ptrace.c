@@ -1126,26 +1126,36 @@ int kpatch_ptrace_attach_thread(kpatch_process_t *proc,
 	int status;
 	struct kpatch_ptrace_ctx *pctx;
 
+	ret = ptrace(PTRACE_ATTACH, tid, NULL, NULL);
+	if (ret < 0) {
+		if (errno == ESRCH) {
+			kpinfo("Thread %d exited before attach.\n", tid);
+			return 0;
+		}
+		kplogerror("can't attach to %d\n", tid);
+		return -1;
+	}
+
 	pctx = kpatch_ptrace_ctx_alloc(proc);
 	if (pctx == NULL) {
 		kperr("Can't alloc kpatch_ptrace_ctx");
 		return -1;
 	}
-
 	pctx->pid = tid;
-	kpdebug("Attaching to %d...", pctx->pid);
 
-	ret = ptrace(PTRACE_ATTACH, pctx->pid, NULL, NULL);
-	if (ret < 0) {
-		kplogerror("can't attach to %d\n", pctx->pid);
-		return -1;
-	}
+	kpdebug("Attaching to %d...", pctx->pid);
 
 	do {
 		ret = waitpid(tid, &status, __WALL);
 		if (ret < 0) {
 			kplogerror("can't wait for thread\n");
 			return -1;
+		}
+
+		if (WIFEXITED(status)) {
+			kpinfo("Thread %d exited during attach.\n", tid);
+			kpatch_ptrace_ctx_destroy(pctx);
+			return 0;
 		}
 
 		/* We are expecting SIGSTOP */

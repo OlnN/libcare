@@ -12,6 +12,11 @@
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/ptrace.h>
+
 #include <gelf.h>
 #include <libunwind.h>
 #include <libunwind-ptrace.h>
@@ -641,6 +646,7 @@ kpatch_process_attach(kpatch_process_t *proc)
 {
 	int *pids = NULL, ret;
 	size_t i, npids = 0, alloc = 0, prevnpids = 0, nattempts;
+	struct kpatch_ptrace_ctx *pctx;
 
 	if (kpatch_process_mem_open(proc, MEM_WRITE) < 0)
 		return -1;
@@ -653,16 +659,11 @@ kpatch_process_attach(kpatch_process_t *proc)
 		if (nattempts == 0) {
 			kpdebug("Found %lu thread(s), attaching...\n", npids);
 		} else {
-			/*
-			 * FIXME(pboldin): This is wrong, amount of threads can
-			 * be the same because some new spawned and some old
-			 * died
-			 */
 			if (prevnpids == npids)
 				break;
 
 			kpdebug("Found %lu new thread(s), attaching...\n",
-				prevnpids - npids);
+				npids - prevnpids);
 		}
 
 		if (proc->is_just_started && npids > 1 && proc->send_fd == -1) {
@@ -683,7 +684,9 @@ kpatch_process_attach(kpatch_process_t *proc)
 				goto detach;
 		}
 
-		prevnpids = npids;
+		prevnpids = 0;
+		list_for_each_entry(pctx, &proc->ptrace.pctxs, list)
+			prevnpids++;
 	}
 
 	if (nattempts == max_attach_attempts) {
@@ -691,12 +694,14 @@ kpatch_process_attach(kpatch_process_t *proc)
 		goto detach;
 	}
 
-	kpinfo("attached to %lu thread(s): %d", npids, pids[0]);
-	for (i = 1; i < npids; i++)
-		kpinfo(", %d", pids[i]);
-	kpinfo("\n");
-
-	free(pids);
+	kpinfo("Attached to %lu thread(s):", npids);
+	list_for_each_entry(pctx, &proc->ptrace.pctxs, list) {
+		kpinfo(" %d", pctx->pid);
+		if (pctx->list.next != &proc->ptrace.pctxs)
+			kpinfo(",");
+		else
+			kpinfo("\n");
+	}
 
 	if (proc->ptrace.unwd == NULL) {
 		proc->ptrace.unwd = unw_create_addr_space(&_UPT_accessors,
@@ -707,6 +712,7 @@ kpatch_process_attach(kpatch_process_t *proc)
 		}
 	}
 
+	free(pids);
 	return 0;
 
 detach:
